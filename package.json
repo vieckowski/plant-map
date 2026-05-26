@@ -1,0 +1,10 @@
+{
+  "name": "plant-map",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mapa realizacji instalacji fotowoltaicznych (OpenStreetMap + Leaflet)",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "serve": "npx --yes serve -l 8000 ."
+  }
+}
