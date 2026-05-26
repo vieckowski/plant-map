@@ -161,15 +161,15 @@ function parseCsv(text) {
 }
 
 function renderMarkers(map, plants) {
-  const cluster = L.markerClusterGroup();
+  const group = L.layerGroup();
 
   plants.forEach((p) => {
     const marker = L.marker([p.lat, p.lng]);
     marker.bindPopup(buildPopupHtml(p), { closeButton: true });
-    cluster.addLayer(marker);
+    group.addLayer(marker);
   });
 
-  map.addLayer(cluster);
+  map.addLayer(group);
 }
 
 function buildPopupHtml(p) {
