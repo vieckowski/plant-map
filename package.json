@@ -4,7 +4,7 @@
   "private": true,
   "description": "Mapa realizacji instalacji fotowoltaicznych (OpenStreetMap + Leaflet)",
   "scripts": {
-    "dev": "npx --yes live-server --port=8000",
+    "dev": "npx --yes live-server --port=8000 --ignore='**/.git/**'",
     "start": "python3 -m http.server 8000"
   }
 }
