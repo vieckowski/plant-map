@@ -17,14 +17,6 @@ body {
   width: 100%;
 }
 
-.leaflet-control-zoom a,
-.leaflet-touch .leaflet-control-zoom a {
-  width: 44px;
-  height: 44px;
-  line-height: 44px;
-  font-size: 1.6rem;
-}
-
 .popup-title {
   font-size: 1rem;
   font-weight: 600;
