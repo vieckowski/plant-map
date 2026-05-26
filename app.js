@@ -139,56 +139,20 @@ function parseCsv(text) {
 }
 
 /**
- * Dodaje punkty instalacji jako warstwę kół renderowaną przez GPU
- * oraz obsługę popupów po kliknięciu.
+ * Dodaje klasyczne znaczniki-pinezki dla każdej instalacji,
+ * z popupem (nazwa + moc) otwieranym po kliknięciu.
  */
 function addPlantsLayer(map, features) {
-  map.addSource("plants", {
-    type: "geojson",
-    data: { type: "FeatureCollection", features },
-  });
+  features.forEach((f) => {
+    const popup = new maplibregl.Popup({
+      closeButton: true,
+      maxWidth: "260px",
+    }).setHTML(buildPopupHtml(f.properties));
 
-  map.addLayer({
-    id: "plants-circles",
-    type: "circle",
-    source: "plants",
-    paint: {
-      // Promień rośnie wraz z przybliżeniem.
-      "circle-radius": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        4,
-        4,
-        10,
-        7,
-        14,
-        10,
-      ],
-      "circle-color": "#f59e0b",
-      "circle-stroke-color": "#ffffff",
-      "circle-stroke-width": 1.5,
-      "circle-opacity": 0.9,
-    },
-  });
-
-  const popup = new maplibregl.Popup({
-    closeButton: true,
-    closeOnClick: true,
-    maxWidth: "260px",
-  });
-
-  map.on("mouseenter", "plants-circles", () => {
-    map.getCanvas().style.cursor = "pointer";
-  });
-  map.on("mouseleave", "plants-circles", () => {
-    map.getCanvas().style.cursor = "";
-  });
-
-  map.on("click", "plants-circles", (e) => {
-    const f = e.features[0];
-    const coords = f.geometry.coordinates.slice();
-    popup.setLngLat(coords).setHTML(buildPopupHtml(f.properties)).addTo(map);
+    new maplibregl.Marker()
+      .setLngLat(f.geometry.coordinates)
+      .setPopup(popup)
+      .addTo(map);
   });
 }
 
