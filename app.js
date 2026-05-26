@@ -24,6 +24,10 @@ function init() {
     center: POLAND_CENTER,
     zoom: POLAND_ZOOM,
     zoomControl: false,
+    zoomSnap: 0, // pozwala na ułamkowe (płynne) poziomy zoomu
+    scrollWheelZoom: false, // wyłączamy skokowy zoom Leafletu
+    smoothWheelZoom: true, // włączamy płynny zoom kółkiem/gładzikiem
+    smoothSensitivity: 1,
   });
 
   // Przyciski + / - w prawym dolnym rogu.
