@@ -23,8 +23,11 @@ function init() {
   const map = L.map("map", {
     center: POLAND_CENTER,
     zoom: POLAND_ZOOM,
-    zoomControl: true, // przyciski + / -
+    zoomControl: false,
   });
+
+  // Przyciski + / - w prawym dolnym rogu.
+  L.control.zoom({ position: "bottomright" }).addTo(map);
 
   createBaseLayer().addTo(map);
 
