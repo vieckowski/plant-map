@@ -1,90 +1,55 @@
 "use strict";
 
-/*
- * Konfiguracja warstwy podkładowej mapy.
- *
- * Domyślnie używane są rastrowe kafelki OpenStreetMap (działa bez klucza API).
- *
- * Aby skorzystać z OpenMapTiles (np. przez MapTiler), wpisz swój klucz API
- * w MAPTILER_KEY poniżej — wtedy mapa automatycznie przełączy się na kafelki
- * oparte o OpenMapTiles. Bez klucza pozostaje czysty OpenStreetMap.
- */
-const MAPTILER_KEY = "";
+// Darmowy podkład wektorowy OpenFreeMap (bez klucza API), styl Liberty.
+const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
 const CSV_URL = "data/growatt_plants.csv";
 
-// Przybliżony środek Polski i startowy poziom przybliżenia.
-const POLAND_CENTER = [52.0, 19.2];
-const POLAND_ZOOM = 6;
+// Startowy widok: środek Polski (MapLibre używa kolejności [lng, lat]).
+const POLAND_CENTER = [19.2, 52.0];
+const POLAND_ZOOM = 5;
 
 document.addEventListener("DOMContentLoaded", init);
 
 function init() {
-  const map = L.map("map", {
+  const map = new maplibregl.Map({
+    container: "map",
+    style: STYLE_URL,
     center: POLAND_CENTER,
     zoom: POLAND_ZOOM,
-    zoomControl: false,
-    zoomSnap: 0, // ułamkowe (płynne) poziomy zoomu
-    zoomDelta: 0.5, // krok zoomu dla przycisków +/- i klawiatury
-    wheelPxPerZoomLevel: 100, // drobniejszy krok kółka = płynniejszy zoom
   });
 
-  // Przyciski + / - w prawym dolnym rogu.
-  L.control.zoom({ position: "bottomright" }).addTo(map);
+  // Przyciski + / - w prawym dolnym rogu (bez kompasu).
+  map.addControl(
+    new maplibregl.NavigationControl({ showCompass: false }),
+    "bottom-right"
+  );
 
-  createBaseLayer().addTo(map);
-
-  fetch(CSV_URL)
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error(`Nie udało się wczytać pliku CSV (HTTP ${res.status}).`);
-      }
-      return res.text();
-    })
-    .then((text) => {
-      const { valid, skipped } = parsePlants(text);
-      renderMarkers(map, valid);
-      updateStats(valid.length, skipped.length);
-    })
-    .catch((err) => {
-      console.error(err);
-      setStats(
-        "Błąd wczytywania danych. Uruchom aplikację przez serwer HTTP (patrz README)."
-      );
-    });
-}
-
-function createBaseLayer() {
-  if (MAPTILER_KEY) {
-    // OpenMapTiles (rastrowy podgląd stylu OSM-Bright od MapTiler).
-    return L.tileLayer(
-      `https://api.maptiler.com/maps/openstreetmap/{z}/{x}/{y}.jpg?key=${MAPTILER_KEY}`,
-      {
-        maxZoom: 19,
-        tileSize: 512,
-        zoomOffset: -1,
-        attribution:
-          '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> ' +
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }
-    );
-  }
-
-  return L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  map.on("load", () => {
+    fetch(CSV_URL)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`Nie udało się wczytać pliku CSV (HTTP ${res.status}).`);
+        }
+        return res.text();
+      })
+      .then((text) => {
+        const { features } = parsePlants(text);
+        addPlantsLayer(map, features);
+        fitToFeatures(map, features);
+      })
+      .catch((err) => console.error(err));
   });
 }
 
 /**
- * Parsuje tekst CSV do listy instalacji.
+ * Parsuje tekst CSV do listy obiektów GeoJSON (punktów).
  * Pomija wiersze z brakującymi lub niepoprawnymi współrzędnymi.
  */
 function parsePlants(text) {
   const rows = parseCsv(text);
-  const valid = [];
-  const skipped = [];
+  const features = [];
+  let skipped = 0;
 
   // Pierwszy wiersz to nagłówek.
   for (let i = 1; i < rows.length; i++) {
@@ -105,13 +70,20 @@ function parsePlants(text) {
       lng > -180 &&
       lng < 180
     ) {
-      valid.push({ account, power, lat, lng });
+      features.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [lng, lat] },
+        properties: {
+          account,
+          power: Number.isFinite(power) ? power : null,
+        },
+      });
     } else {
-      skipped.push({ account, raw: cols });
+      skipped++;
     }
   }
 
-  return { valid, skipped };
+  return { features, skipped };
 }
 
 /**
@@ -166,21 +138,74 @@ function parseCsv(text) {
   return rows;
 }
 
-function renderMarkers(map, plants) {
-  const group = L.layerGroup();
-
-  plants.forEach((p) => {
-    const marker = L.marker([p.lat, p.lng]);
-    marker.bindPopup(buildPopupHtml(p), { closeButton: true });
-    group.addLayer(marker);
+/**
+ * Dodaje punkty instalacji jako warstwę kół renderowaną przez GPU
+ * oraz obsługę popupów po kliknięciu.
+ */
+function addPlantsLayer(map, features) {
+  map.addSource("plants", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features },
   });
 
-  map.addLayer(group);
+  map.addLayer({
+    id: "plants-circles",
+    type: "circle",
+    source: "plants",
+    paint: {
+      // Promień rośnie wraz z przybliżeniem.
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        4,
+        4,
+        10,
+        7,
+        14,
+        10,
+      ],
+      "circle-color": "#f59e0b",
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": 1.5,
+      "circle-opacity": 0.9,
+    },
+  });
+
+  const popup = new maplibregl.Popup({
+    closeButton: true,
+    closeOnClick: true,
+    maxWidth: "260px",
+  });
+
+  map.on("mouseenter", "plants-circles", () => {
+    map.getCanvas().style.cursor = "pointer";
+  });
+  map.on("mouseleave", "plants-circles", () => {
+    map.getCanvas().style.cursor = "";
+  });
+
+  map.on("click", "plants-circles", (e) => {
+    const f = e.features[0];
+    const coords = f.geometry.coordinates.slice();
+    popup.setLngLat(coords).setHTML(buildPopupHtml(f.properties)).addTo(map);
+  });
 }
 
-function buildPopupHtml(p) {
-  const name = escapeHtml(p.account) || "(brak nazwy)";
-  const power = Number.isFinite(p.power) ? formatNumber(p.power) : "brak danych";
+/** Dopasowuje widok mapy tak, aby objąć wszystkie instalacje. */
+function fitToFeatures(map, features) {
+  if (!features.length) return;
+  const bounds = new maplibregl.LngLatBounds();
+  features.forEach((f) => bounds.extend(f.geometry.coordinates));
+  map.fitBounds(bounds, { padding: 40, maxZoom: 12, duration: 0 });
+}
+
+function buildPopupHtml(props) {
+  const name = escapeHtml(props.account) || "(brak nazwy)";
+  const power =
+    props.power !== null && props.power !== undefined
+      ? formatNumber(props.power)
+      : "brak danych";
 
   return `
     <div class="popup">
@@ -191,19 +216,6 @@ function buildPopupHtml(p) {
       </p>
     </div>
   `;
-}
-
-function updateStats(validCount, skippedCount) {
-  let msg = `Instalacji na mapie: ${validCount}`;
-  if (skippedCount > 0) {
-    msg += ` · pominięto (brak/niepoprawne współrzędne): ${skippedCount}`;
-  }
-  setStats(msg);
-}
-
-function setStats(message) {
-  const el = document.getElementById("stats");
-  if (el) el.textContent = message;
 }
 
 function formatNumber(n) {
