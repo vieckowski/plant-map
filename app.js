@@ -1,55 +1,93 @@
 "use strict";
 
-// Darmowy podkład wektorowy OpenFreeMap (bez klucza API), styl Liberty.
-const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+/*
+ * Konfiguracja warstwy podkładowej mapy.
+ *
+ * Domyślnie używane są rastrowe kafelki OpenStreetMap (działa bez klucza API).
+ *
+ * Aby skorzystać z OpenMapTiles (np. przez MapTiler), wpisz swój klucz API
+ * w MAPTILER_KEY poniżej — wtedy mapa automatycznie przełączy się na kafelki
+ * oparte o OpenMapTiles. Bez klucza pozostaje czysty OpenStreetMap.
+ */
+const MAPTILER_KEY = "";
 
 const CSV_URL = "data/growatt_plants.csv";
 
-// Startowy widok: środek Polski (MapLibre używa kolejności [lng, lat]).
-const POLAND_CENTER = [19.2, 52.0];
-const POLAND_ZOOM = 5;
+// Przybliżony środek Polski i startowy poziom przybliżenia.
+const POLAND_CENTER = [52.0, 19.2];
+const POLAND_ZOOM = 6;
 
 document.addEventListener("DOMContentLoaded", init);
 
 function init() {
-  const map = new maplibregl.Map({
-    container: "map",
-    style: STYLE_URL,
+  const map = L.map("map", {
     center: POLAND_CENTER,
     zoom: POLAND_ZOOM,
+    zoomControl: false,
+    // Zoom tylko przyciskami — wyłączamy kółko/gesty, aby przewijanie strony
+    // (mapa jest w iframe) nie zmieniało przypadkowo przybliżenia.
+    scrollWheelZoom: false,
+    doubleClickZoom: false,
+    touchZoom: false,
+    boxZoom: false,
   });
 
-  // Przyciski + / - w prawym dolnym rogu (bez kompasu).
-  map.addControl(
-    new maplibregl.NavigationControl({ showCompass: false }),
-    "bottom-right"
-  );
+  // Przyciski + / - w prawym dolnym rogu.
+  L.control.zoom({ position: "bottomright" }).addTo(map);
 
-  map.on("load", () => {
-    fetch(CSV_URL)
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`Nie udało się wczytać pliku CSV (HTTP ${res.status}).`);
-        }
-        return res.text();
-      })
-      .then((text) => {
-        const { features } = parsePlants(text);
-        addPlantsLayer(map, features);
-        fitToFeatures(map, features);
-      })
-      .catch((err) => console.error(err));
+  createBaseLayer().addTo(map);
+
+  fetch(CSV_URL)
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error(`Nie udało się wczytać pliku CSV (HTTP ${res.status}).`);
+      }
+      return res.text();
+    })
+    .then((text) => {
+      const { valid, skipped } = parsePlants(text);
+      renderMarkers(map, valid);
+      updateStats(valid.length, skipped.length);
+    })
+    .catch((err) => {
+      console.error(err);
+      setStats(
+        "Błąd wczytywania danych. Uruchom aplikację przez serwer HTTP (patrz README)."
+      );
+    });
+}
+
+function createBaseLayer() {
+  if (MAPTILER_KEY) {
+    // OpenMapTiles (rastrowy podgląd stylu OSM-Bright od MapTiler).
+    return L.tileLayer(
+      `https://api.maptiler.com/maps/openstreetmap/{z}/{x}/{y}.jpg?key=${MAPTILER_KEY}`,
+      {
+        maxZoom: 19,
+        tileSize: 512,
+        zoomOffset: -1,
+        attribution:
+          '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> ' +
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }
+    );
+  }
+
+  return L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   });
 }
 
 /**
- * Parsuje tekst CSV do listy obiektów GeoJSON (punktów).
+ * Parsuje tekst CSV do listy instalacji.
  * Pomija wiersze z brakującymi lub niepoprawnymi współrzędnymi.
  */
 function parsePlants(text) {
   const rows = parseCsv(text);
-  const features = [];
-  let skipped = 0;
+  const valid = [];
+  const skipped = [];
 
   // Pierwszy wiersz to nagłówek.
   for (let i = 1; i < rows.length; i++) {
@@ -70,20 +108,13 @@ function parsePlants(text) {
       lng > -180 &&
       lng < 180
     ) {
-      features.push({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [lng, lat] },
-        properties: {
-          account,
-          power: Number.isFinite(power) ? power : null,
-        },
-      });
+      valid.push({ account, power, lat, lng });
     } else {
-      skipped++;
+      skipped.push({ account, raw: cols });
     }
   }
 
-  return { features, skipped };
+  return { valid, skipped };
 }
 
 /**
@@ -138,38 +169,21 @@ function parseCsv(text) {
   return rows;
 }
 
-/**
- * Dodaje klasyczne znaczniki-pinezki dla każdej instalacji,
- * z popupem (nazwa + moc) otwieranym po kliknięciu.
- */
-function addPlantsLayer(map, features) {
-  features.forEach((f) => {
-    const popup = new maplibregl.Popup({
-      closeButton: true,
-      maxWidth: "260px",
-    }).setHTML(buildPopupHtml(f.properties));
+function renderMarkers(map, plants) {
+  const group = L.layerGroup();
 
-    new maplibregl.Marker()
-      .setLngLat(f.geometry.coordinates)
-      .setPopup(popup)
-      .addTo(map);
+  plants.forEach((p) => {
+    const marker = L.marker([p.lat, p.lng]);
+    marker.bindPopup(buildPopupHtml(p), { closeButton: true });
+    group.addLayer(marker);
   });
+
+  map.addLayer(group);
 }
 
-/** Dopasowuje widok mapy tak, aby objąć wszystkie instalacje. */
-function fitToFeatures(map, features) {
-  if (!features.length) return;
-  const bounds = new maplibregl.LngLatBounds();
-  features.forEach((f) => bounds.extend(f.geometry.coordinates));
-  map.fitBounds(bounds, { padding: 40, maxZoom: 12, duration: 0 });
-}
-
-function buildPopupHtml(props) {
-  const name = escapeHtml(props.account) || "(brak nazwy)";
-  const power =
-    props.power !== null && props.power !== undefined
-      ? formatNumber(props.power)
-      : "brak danych";
+function buildPopupHtml(p) {
+  const name = escapeHtml(p.account) || "(brak nazwy)";
+  const power = Number.isFinite(p.power) ? formatNumber(p.power) : "brak danych";
 
   return `
     <div class="popup">
@@ -180,6 +194,19 @@ function buildPopupHtml(props) {
       </p>
     </div>
   `;
+}
+
+function updateStats(validCount, skippedCount) {
+  let msg = `Instalacji na mapie: ${validCount}`;
+  if (skippedCount > 0) {
+    msg += ` · pominięto (brak/niepoprawne współrzędne): ${skippedCount}`;
+  }
+  setStats(msg);
+}
+
+function setStats(message) {
+  const el = document.getElementById("stats");
+  if (el) el.textContent = message;
 }
 
 function formatNumber(n) {
